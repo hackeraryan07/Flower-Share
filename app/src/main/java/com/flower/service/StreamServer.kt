@@ -8,6 +8,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.channels.Channel
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.BufferedOutputStream
@@ -43,7 +45,7 @@ class StreamServer(
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
 
-    private val activeClients = ConcurrentHashMap<String, BufferedOutputStream>()
+    private val activeClients = ConcurrentHashMap<String, Channel<ByteArray>>()
     private val viewerCounter = AtomicInteger(0)
     private val frameCounter = AtomicLong(0)
     private val byteCounter = AtomicLong(0)
@@ -156,32 +158,27 @@ class StreamServer(
                 "X-Timestamp: ${System.currentTimeMillis()}\r\n\r\n").toByteArray(Charsets.UTF_8)
         val footer = "\r\n".toByteArray(Charsets.UTF_8)
 
+        // Pre-allocate the full frame payload to avoid re-assembling it for every client
+        val payload = ByteArray(header.size + jpegBytes.size + footer.size)
+        System.arraycopy(header, 0, payload, 0, header.size)
+        System.arraycopy(jpegBytes, 0, payload, header.size, jpegBytes.size)
+        System.arraycopy(footer, 0, payload, header.size + jpegBytes.size, footer.size)
+        
+        byteCounter.addAndGet(payload.size.toLong())
+
         val iterator = activeClients.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
-            val clientId = entry.key
-            val stream = entry.value
-            try {
-                synchronized(stream) {
-                    stream.write(header)
-                    stream.write(jpegBytes)
-                    stream.write(footer)
-                    stream.flush()
-                }
-                byteCounter.addAndGet((header.size + jpegBytes.size + footer.size).toLong())
-            } catch (e: Exception) {
-                // Client disconnected
-                iterator.remove()
-                viewerCounter.decrementAndGet()
-                try {
-                    stream.close()
-                } catch (_: Exception) {}
-                Log.d(TAG, "Client $clientId disconnected")
+            val channel = entry.value
+            // trySend on a CONFLATED channel always succeeds and non-blockingly replaces the old unread frame
+            val success = channel.trySend(payload).isSuccess
+            if (!success) {
+                // If it fails for an unforeseen reason, log it or remove the client, but it shouldn't for CONFLATED.
             }
         }
     }
 
-    private fun handleClient(socket: Socket) {
+    private suspend fun handleClient(socket: Socket) {
         val clientId = "${socket.inetAddress.hostAddress}:${socket.port}"
         try {
             val reader = socket.getInputStream().bufferedReader()
@@ -208,13 +205,14 @@ class StreamServer(
                     out.write(header)
                     out.flush()
 
-                    activeClients[clientId] = out
+                    val channel = Channel<ByteArray>(Channel.CONFLATED)
+                    activeClients[clientId] = channel
                     viewerCounter.incrementAndGet()
 
-                    // Send latest frame immediately if available
-                    val snapshot = latestJpegFrame
-                    if (snapshot != null) {
-                        try {
+                    try {
+                        // Send latest frame immediately if available
+                        val snapshot = latestJpegFrame
+                        if (snapshot != null) {
                             val frameHeader = ("--$BOUNDARY\r\n" +
                                     "Content-Type: image/jpeg\r\n" +
                                     "Content-Length: ${snapshot.size}\r\n" +
@@ -223,11 +221,22 @@ class StreamServer(
                             out.write(snapshot)
                             out.write("\r\n".toByteArray(Charsets.UTF_8))
                             out.flush()
-                        } catch (e: Exception) {
-                            activeClients.remove(clientId)
-                            viewerCounter.decrementAndGet()
-                            socket.close()
                         }
+                        
+                        // Listen for new frames on the client's dedicated channel
+                        while (coroutineContext.isActive) {
+                            val framePayload = channel.receive()
+                            out.write(framePayload)
+                            out.flush()
+                        }
+                    } catch (e: Exception) {
+                        // Socket closed or connection lost
+                        Log.d(TAG, "Client $clientId disconnected")
+                    } finally {
+                        activeClients.remove(clientId)
+                        viewerCounter.decrementAndGet()
+                        try { socket.close() } catch (_: Exception) {}
+                        channel.close()
                     }
                 }
 
