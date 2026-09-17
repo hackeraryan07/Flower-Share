@@ -61,9 +61,6 @@ class ScreenCaptureService : Service() {
         private val _streamUrl = MutableStateFlow<String?>(null)
         val streamUrl: StateFlow<String?> = _streamUrl.asStateFlow()
 
-        @Volatile
-        var latestThumbnail: Bitmap? = null
-
         fun start(context: Context, resultCode: Int, data: Intent) {
             try {
                 val intent = Intent(context, ScreenCaptureService::class.java).apply {
@@ -107,8 +104,10 @@ class ScreenCaptureService : Service() {
 
     private val jpegOutputStream = ByteArrayOutputStream(128 * 1024)
     private var reusableBitmap: Bitmap? = null
+    private var croppedBitmap: Bitmap? = null
     private var lastFrameTime = 0L
-    private val minFrameIntervalMs = 30L // Cap at ~33 FPS to keep LAN bandwidth optimal and smooth
+    private val minFrameIntervalMs = 33L // Cap at ~30 FPS for smooth LAN streaming without CPU saturation
+    private val isProcessingFrame = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private var mediaProjectionCallback: MediaProjection.Callback? = null
 
@@ -119,6 +118,9 @@ class ScreenCaptureService : Service() {
         try {
             createNotificationChannel()
             acquireLocks()
+            // Immediately start foreground notification upon service creation to fulfill
+            // Android 14+ / ForegroundServiceDidNotStartInTimeException contract unconditionally.
+            startForegroundNotification()
         } catch (t: Throwable) {
             Log.e(TAG, "Error in onCreate", t)
             CrashReporter.recordError(this, "Service Initialization Error", t)
@@ -127,6 +129,9 @@ class ScreenCaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
+            // Always ensure startForeground has been called as early as possible
+            startForegroundNotification()
+
             when (intent?.action) {
                 ACTION_START -> {
                     val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
@@ -138,16 +143,20 @@ class ScreenCaptureService : Service() {
                     }
 
                     if (resultCode != -1 && data != null) {
-                        // Start foreground FIRST before touching MediaProjection (Mandatory on Android 14+)
-                        val started = startForegroundNotification()
-                        if (started) {
+                        // Ensure background handler thread is active
+                        if (handlerThread == null || handlerThread?.isAlive != true) {
+                            handlerThread = HandlerThread("ScreenCaptureThread").apply { start() }
+                            backgroundHandler = Handler(handlerThread!!.looper)
+                        }
+                        backgroundHandler?.post {
                             startCapture(resultCode, data)
-                        } else {
-                            Log.e(TAG, "Foreground notification failed to start")
-                            stopSelf()
                         }
                     } else {
-                        Log.e(TAG, "Invalid resultCode or data for screen capture")
+                        Log.e(TAG, "Invalid resultCode or data for screen capture: resultCode=$resultCode, data=$data")
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(applicationContext, "Invalid screen capture permission data received", Toast.LENGTH_SHORT).show()
+                        }
+                        stopCapture()
                         stopSelf()
                     }
                 }
@@ -205,9 +214,9 @@ class ScreenCaptureService : Service() {
             val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(getString(R.string.status_broadcasting))
                 .setContentText("Streaming screen to local WiFi LAN")
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_screen_share_notification)
                 .setContentIntent(openPendingIntent)
-                .addAction(R.drawable.ic_launcher_foreground, getString(R.string.stop_sharing), stopPendingIntent)
+                .addAction(R.drawable.ic_screen_share_notification, getString(R.string.stop_sharing), stopPendingIntent)
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build()
@@ -272,9 +281,12 @@ class ScreenCaptureService : Service() {
                 return
             }
 
-            // Prepare background handler thread
-            handlerThread = HandlerThread("ScreenCaptureThread").apply { start() }
-            backgroundHandler = Handler(handlerThread!!.looper)
+            // Ensure background handler thread is active
+            if (handlerThread == null || handlerThread?.isAlive != true) {
+                handlerThread = HandlerThread("ScreenCaptureThread").apply { start() }
+                backgroundHandler = Handler(handlerThread!!.looper)
+            }
+            val handler = backgroundHandler ?: Handler(Looper.getMainLooper())
 
             // CRITICAL (Android 14+ / API 34+): Register Callback BEFORE createVirtualDisplay()
             mediaProjectionCallback = object : MediaProjection.Callback() {
@@ -287,7 +299,7 @@ class ScreenCaptureService : Service() {
                     stopSelf()
                 }
             }
-            mediaProjection?.registerCallback(mediaProjectionCallback!!, backgroundHandler)
+            mediaProjection?.registerCallback(mediaProjectionCallback!!, handler)
 
             // Calculate display resolution safely
             val (screenWidth, screenHeight, screenDensity) = getDisplayDimensions()
@@ -303,7 +315,8 @@ class ScreenCaptureService : Service() {
             val captureWidth = (((screenWidth * scale).toInt() / 2) * 2).coerceAtLeast(320)
             val captureHeight = (((screenHeight * scale).toInt() / 2) * 2).coerceAtLeast(480)
 
-            imageReader = ImageReader.newInstance(captureWidth, captureHeight, PixelFormat.RGBA_8888, 2)
+            // Allocate 4 image buffers so that rapid display updates never exhaust the buffer queue
+            imageReader = ImageReader.newInstance(captureWidth, captureHeight, PixelFormat.RGBA_8888, 4)
 
             // Start embedded streaming server
             streamServer = StreamServer(preferredPort = 8080, deviceName = NetworkDiscovery.getDeviceName())
@@ -395,52 +408,59 @@ class ScreenCaptureService : Service() {
             image = reader.acquireLatestImage()
             if (image == null) return
 
+            // If a previous frame is still being encoded or we haven't reached min interval, skip
             val now = System.currentTimeMillis()
-            if (now - lastFrameTime < minFrameIntervalMs) {
-                // Drop frame to preserve target FPS and prevent CPU congestion
+            if (now - lastFrameTime < minFrameIntervalMs || !isProcessingFrame.compareAndSet(false, true)) {
+                // Drop frame to preserve responsiveness and target FPS
                 return
             }
             lastFrameTime = now
 
-            val planes = image.planes
-            if (planes.isEmpty()) return
+            try {
+                val planes = image.planes
+                if (planes.isEmpty()) return
 
-            val buffer = planes[0].buffer
-            val pixelStride = planes[0].pixelStride
-            val rowStride = planes[0].rowStride
-            val rowPadding = rowStride - pixelStride * width
+                val buffer = planes[0].buffer
+                val pixelStride = planes[0].pixelStride
+                val rowStride = planes[0].rowStride
+                val rowPadding = rowStride - pixelStride * width
 
-            // Bitmap width considering stride padding
-            val bitmapWidth = width + rowPadding / pixelStride
-            if (reusableBitmap == null || reusableBitmap?.width != bitmapWidth || reusableBitmap?.height != height) {
-                reusableBitmap?.recycle()
-                reusableBitmap = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
-            }
+                val bitmapWidth = width + rowPadding / pixelStride
+                if (reusableBitmap == null || reusableBitmap?.width != bitmapWidth || reusableBitmap?.height != height) {
+                    reusableBitmap?.recycle()
+                    reusableBitmap = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
+                }
 
-            val bmp = reusableBitmap ?: return
-            bmp.copyPixelsFromBuffer(buffer)
+                val bmp = reusableBitmap ?: return
+                bmp.copyPixelsFromBuffer(buffer)
 
-            // Crop out padding if any
-            val finalBitmap = if (rowPadding > 0) {
-                Bitmap.createBitmap(bmp, 0, 0, width, height)
-            } else {
-                bmp
-            }
+                val frameBitmap = if (rowPadding > 0) {
+                    if (croppedBitmap == null || croppedBitmap?.width != width || croppedBitmap?.height != height) {
+                        croppedBitmap?.recycle()
+                        croppedBitmap = Bitmap.createBitmap(bmp, 0, 0, width, height)
+                    } else {
+                        // Re-draw onto croppedBitmap without allocation
+                        val canvas = android.graphics.Canvas(croppedBitmap!!)
+                        val srcRect = android.graphics.Rect(0, 0, width, height)
+                        val dstRect = android.graphics.Rect(0, 0, width, height)
+                        canvas.drawBitmap(bmp, srcRect, dstRect, null)
+                    }
+                    croppedBitmap ?: bmp
+                } else {
+                    bmp
+                }
 
-            jpegOutputStream.reset()
-            finalBitmap.compress(Bitmap.CompressFormat.JPEG, 70, jpegOutputStream)
-            val jpegBytes = jpegOutputStream.toByteArray()
+                jpegOutputStream.reset()
+                frameBitmap.compress(Bitmap.CompressFormat.JPEG, 70, jpegOutputStream)
+                val jpegBytes = jpegOutputStream.toByteArray()
 
-            // Update latest local thumbnail for UI preview
-            latestThumbnail = finalBitmap
-
-            streamServer?.onFrameAvailable(jpegBytes, width, height)
-
-            if (rowPadding > 0 && finalBitmap != bmp) {
-                finalBitmap.recycle()
+                streamServer?.onFrameAvailable(jpegBytes, width, height)
+            } finally {
+                isProcessingFrame.set(false)
             }
         } catch (e: Exception) {
-            // Buffer may be closed or in transition - normal during stream stop/reconfiguration
+            // Normal during stream stop or resolution transition
+            isProcessingFrame.set(false)
         } finally {
             try {
                 image?.close()
@@ -489,7 +509,8 @@ class ScreenCaptureService : Service() {
         try {
             reusableBitmap?.recycle()
             reusableBitmap = null
-            latestThumbnail = null
+            croppedBitmap?.recycle()
+            croppedBitmap = null
         } catch (_: Exception) {}
 
         releaseLocks()

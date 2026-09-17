@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Link
@@ -69,12 +70,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flower.service.ScreenCaptureService
 import com.flower.service.StreamServerStats
+import com.flower.ui.components.CrashBanner
+import com.flower.util.CrashReport
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SharingScreen(
     stats: StreamServerStats,
     streamUrl: String?,
+    crashReport: CrashReport? = null,
+    onViewCrashReport: () -> Unit = {},
+    onClearCrashReport: () -> Unit = {},
     onBack: () -> Unit,
     onStopSharing: () -> Unit,
     onMinimize: () -> Unit
@@ -119,6 +125,20 @@ fun SharingScreen(
                         )
                     }
                 },
+                actions = {
+                    if (crashReport != null) {
+                        IconButton(
+                            onClick = onViewCrashReport,
+                            modifier = Modifier.testTag("btn_view_crash_log_sharing")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BugReport,
+                                contentDescription = "View Error Logs",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
                 )
@@ -134,6 +154,15 @@ fun SharingScreen(
                 .padding(horizontal = 20.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Error banner if any error was caught during capture/streaming
+            if (crashReport != null) {
+                CrashBanner(
+                    report = crashReport,
+                    onViewLog = onViewCrashReport,
+                    onDismiss = onClearCrashReport
+                )
+            }
+
             // Main Live Status Card
             Card(
                 modifier = Modifier
@@ -334,51 +363,6 @@ fun SharingScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-
-            // Live Stream Thumbnail Preview
-            val thumbnail = ScreenCaptureService.latestThumbnail
-            if (thumbnail != null) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 540.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "Outgoing Screen Preview",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.align(Alignment.Start)
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(160.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color.Black),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                bitmap = thumbnail.asImageBitmap(),
-                                contentDescription = "Outgoing Stream Preview"
-                            )
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(20.dp))
-            } else {
-                Spacer(modifier = Modifier.height(10.dp))
-            }
 
             // Action Buttons
             Button(

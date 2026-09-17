@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.CastConnected
 import androidx.compose.material.icons.filled.Info
@@ -111,6 +112,18 @@ fun HomeScreen(
                     }
                 },
                 actions = {
+                    if (crashReport != null) {
+                        IconButton(
+                            onClick = onViewCrashReport,
+                            modifier = Modifier.testTag("btn_view_crash_log_top")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BugReport,
+                                contentDescription = "View Error Logs",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
                     IconButton(
                         onClick = onRefreshNetwork,
                         modifier = Modifier.testTag("refresh_network_button")

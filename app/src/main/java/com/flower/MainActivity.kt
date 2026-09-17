@@ -185,6 +185,9 @@ fun ScreenShareApp(
                 SharingScreen(
                     stats = shareStats,
                     streamUrl = streamUrl,
+                    crashReport = latestCrashReport,
+                    onViewCrashReport = { showCrashDialog = true },
+                    onClearCrashReport = { CrashReporter.clearReport() },
                     onBack = { viewModel.navigateTo(AppScreen.HOME) },
                     onStopSharing = { viewModel.stopSharing(context) },
                     onMinimize = onMinimize
