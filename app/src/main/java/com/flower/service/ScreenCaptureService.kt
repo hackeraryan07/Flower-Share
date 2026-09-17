@@ -1,6 +1,7 @@
 package com.flower.service
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -134,15 +135,20 @@ class ScreenCaptureService : Service() {
 
             when (intent?.action) {
                 ACTION_START -> {
-                    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                    val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
-                    } else {
+                    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
+                    val data: Intent? = try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(EXTRA_DATA)
+                        }
+                    } catch (_: Throwable) {
                         @Suppress("DEPRECATION")
                         intent.getParcelableExtra(EXTRA_DATA)
                     }
 
-                    if (resultCode != -1 && data != null) {
+                    if (resultCode == Activity.RESULT_OK && data != null) {
                         // Ensure background handler thread is active
                         if (handlerThread == null || handlerThread?.isAlive != true) {
                             handlerThread = HandlerThread("ScreenCaptureThread").apply { start() }
@@ -154,7 +160,7 @@ class ScreenCaptureService : Service() {
                     } else {
                         Log.e(TAG, "Invalid resultCode or data for screen capture: resultCode=$resultCode, data=$data")
                         Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(applicationContext, "Invalid screen capture permission data received", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(applicationContext, "Screen capture permission not granted", Toast.LENGTH_SHORT).show()
                         }
                         stopCapture()
                         stopSelf()
