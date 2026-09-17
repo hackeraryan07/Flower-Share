@@ -1,0 +1,8 @@
+{
+  "name": "Screen Share",
+  "description": "Fast local WiFi LAN screen sharing app with zero internet required and instant peer auto-discovery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

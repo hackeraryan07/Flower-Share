@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Screen Share</string>
+    <string name="title_screen_share">Screen Share</string>
+    <string name="subtitle_screen_share">Instant Local WiFi LAN Streaming</string>
+    <string name="btn_share_screen">Share Screen</string>
+    <string name="btn_view_screen">View Screen</string>
+    <string name="status_broadcasting">Broadcasting Screen</string>
+    <string name="status_viewing">Viewing Stream</string>
+    <string name="stop_sharing">Stop Sharing</string>
+    <string name="start_sharing">Start Screen Share</string>
+    <string name="notification_channel_name">Screen Sharing Service</string>
+    <string name="notification_channel_desc">Active screen capture notification</string>
+</resources>

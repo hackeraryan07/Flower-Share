@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Monitor Base & Stand -->
+    <path
+        android:fillColor="#818CF8"
+        android:pathData="M48,72 L60,72 L62,77 L46,77 Z" />
+    <path
+        android:fillColor="#6366F1"
+        android:pathData="M42,77 L66,77 L66,80 L42,80 Z" />
+
+    <!-- Monitor Outer Display Frame -->
+    <path
+        android:fillColor="#E2E8F0"
+        android:pathData="M27,28 C25.3,28 24,29.3 24,31 L24,67 C24,68.7 25.3,70 27,70 L81,70 C82.7,70 84,68.7 84,67 L84,31 C84,29.3 82.7,28 81,28 Z M79,65 L29,65 L29,33 L79,33 Z" />
+
+    <!-- Screen Inner Display Glow -->
+    <path
+        android:fillColor="#1E293B"
+        android:pathData="M29,33 L79,33 L79,65 L29,65 Z" />
+
+    <!-- Cast / Wifi Wave 1 (Inner dot) -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M35,60 A3,3 0 1,1 35,54 A3,3 0 1,1 35,60 Z" />
+
+    <!-- Cast / Wifi Wave 2 -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M35,48 C41.6,48 47,53.4 47,60 L44,60 C44,55.0 40.0,51 35,51 Z" />
+
+    <!-- Cast / Wifi Wave 3 -->
+    <path
+        android:fillColor="#06B6D4"
+        android:pathData="M35,42 C44.9,42 53,50.1 53,60 L50,60 C50,51.7 43.3,45 35,45 Z" />
+
+    <!-- Screen Display Sharing Symbol / Mobile frame -->
+    <path
+        android:fillColor="#A5B4FC"
+        android:pathData="M56,40 C55.4,40 55,40.4 55,41 L55,57 C55,57.6 55.4,58 56,58 L71,58 C71.6,58 72,57.6 72,57 L72,41 C72,40.4 71.6,40 71,40 Z M70,55 L57,55 L57,43 L70,43 Z" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M62,41 L65,41 L65,42 L62,42 Z" />
+</vector>
