@@ -186,9 +186,7 @@ class StreamReceiver {
                         if (!isPaused.get()) {
                             val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
                             if (bitmap != null) {
-                                val old = _currentFrame.value
                                 _currentFrame.value = bitmap
-                                old?.recycle()
 
                                 frameCount.incrementAndGet()
                                 _stats.value = _stats.value.copy(
@@ -220,7 +218,6 @@ class StreamReceiver {
         streamJob = null
 
         isPaused.set(false)
-        _currentFrame.value?.recycle()
         _currentFrame.value = null
         _stats.value = ReceiverStats(state = ReceiverState.DISCONNECTED)
     }
