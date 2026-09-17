@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flower.ui.AppScreen
 import com.flower.ui.NetworkState
+import com.flower.ui.components.CrashBanner
+import com.flower.util.CrashReport
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,6 +66,9 @@ fun HomeScreen(
     networkState: NetworkState,
     isSharing: Boolean,
     discoveredCount: Int,
+    crashReport: CrashReport? = null,
+    onViewCrashReport: () -> Unit = {},
+    onClearCrashReport: () -> Unit = {},
     onRefreshNetwork: () -> Unit,
     onRequestShare: () -> Unit,
     onOpenSharingScreen: () -> Unit,
@@ -132,6 +137,15 @@ fun HomeScreen(
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Crash/Error Log banner if any error was caught
+            if (crashReport != null) {
+                CrashBanner(
+                    report = crashReport,
+                    onViewLog = onViewCrashReport,
+                    onDismiss = onClearCrashReport
+                )
+            }
+
             // LAN Network Status Chip / Bar
             NetworkStatusBar(
                 networkState = networkState,

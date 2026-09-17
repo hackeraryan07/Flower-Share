@@ -22,24 +22,31 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flower.service.ScreenCaptureService
 import com.flower.ui.AppScreen
 import com.flower.ui.ScreenShareViewModel
+import com.flower.ui.components.CrashReportDialog
 import com.flower.ui.screens.HomeScreen
 import com.flower.ui.screens.SharingScreen
 import com.flower.ui.screens.ViewerListScreen
 import com.flower.ui.screens.ViewerStreamScreen
 import com.flower.ui.theme.FlowerTheme
+import com.flower.util.CrashReporter
 
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashReporter.init(application)
         enableEdgeToEdge()
 
         setContent {
@@ -69,17 +76,31 @@ fun ScreenShareApp(
     val viewerStats by viewModel.viewerStats.collectAsState()
     val activeHost by viewModel.activeHost.collectAsState()
 
+    val latestCrashReport by CrashReporter.latestReport.collectAsState()
+    var showCrashDialog by remember { mutableStateOf(false) }
+
+    // Automatically prompt dialog when a new error/crash is captured
+    LaunchedEffect(latestCrashReport) {
+        if (latestCrashReport != null) {
+            showCrashDialog = true
+        }
+    }
+
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // Media projection launcher
+    // Media projection launcher with comprehensive crash guard
     val projectionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            ScreenCaptureService.start(context, result.resultCode, result.data!!)
-            viewModel.navigateTo(AppScreen.SHARING)
-        } else {
-            Toast.makeText(context, "Screen capture permission is required to share screen", Toast.LENGTH_SHORT).show()
+        try {
+            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                ScreenCaptureService.start(context, result.resultCode, result.data!!)
+                viewModel.navigateTo(AppScreen.SHARING)
+            } else {
+                Toast.makeText(context, "Screen capture permission was cancelled or not granted", Toast.LENGTH_SHORT).show()
+            }
+        } catch (t: Throwable) {
+            CrashReporter.recordError(context, "Failed to Launch Screen Sharing", t)
         }
     }
 
@@ -87,22 +108,37 @@ fun ScreenShareApp(
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        val mpManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
-        if (mpManager != null) {
-            projectionLauncher.launch(mpManager.createScreenCaptureIntent())
+        try {
+            if (!isGranted) {
+                Toast.makeText(context, "Notification permission recommended for background streaming status", Toast.LENGTH_LONG).show()
+            }
+            val mpManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+            if (mpManager != null) {
+                projectionLauncher.launch(mpManager.createScreenCaptureIntent())
+            } else {
+                Toast.makeText(context, "MediaProjection service not available on this device", Toast.LENGTH_LONG).show()
+            }
+        } catch (t: Throwable) {
+            CrashReporter.recordError(context, "Notification Permission Error", t)
         }
     }
 
     val startScreenShare = {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            val mpManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
-            if (mpManager != null) {
-                projectionLauncher.launch(mpManager.createScreenCaptureIntent())
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                val mpManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+                if (mpManager != null) {
+                    projectionLauncher.launch(mpManager.createScreenCaptureIntent())
+                } else {
+                    Toast.makeText(context, "MediaProjection service not available on this device", Toast.LENGTH_LONG).show()
+                }
             }
+        } catch (t: Throwable) {
+            CrashReporter.recordError(context, "Screen Share Request Error", t)
         }
     }
 
@@ -116,6 +152,14 @@ fun ScreenShareApp(
         }
     }
 
+    // Crash Report Modal
+    if (showCrashDialog && latestCrashReport != null) {
+        CrashReportDialog(
+            report = latestCrashReport!!,
+            onDismiss = { showCrashDialog = false }
+        )
+    }
+
     AnimatedContent(
         targetState = currentScreen,
         transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -127,6 +171,9 @@ fun ScreenShareApp(
                     networkState = networkState,
                     isSharing = isSharing,
                     discoveredCount = discoveredHosts.size,
+                    crashReport = latestCrashReport,
+                    onViewCrashReport = { showCrashDialog = true },
+                    onClearCrashReport = { CrashReporter.clearReport() },
                     onRefreshNetwork = { viewModel.refreshNetworkInfo() },
                     onRequestShare = { startScreenShare() },
                     onOpenSharingScreen = { viewModel.navigateTo(AppScreen.SHARING) },
